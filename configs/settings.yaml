@@ -1,4 +1,4 @@
-﻿stream:
+stream:
   buffer_fps: 16
   analysis_fps: 8
   buffer_seconds: 30
@@ -11,6 +11,11 @@ perception:
   tracker_config: "bytetrack.yaml"
   confidence_threshold: 0.45
   person_class_id: 0
+
+vlm:
+  enabled: true
+  model_id: "vikhyatk/moondream2"
+  cache_dir: "weights/hf_cache"
 
 events:
   cooldown_seconds: 15.0

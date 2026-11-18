@@ -1,40 +1,59 @@
-﻿import json
+import json
 from pathlib import Path
 from queue import Queue
 import shutil
 import subprocess
 import threading
-from typing import List
+from typing import List, Optional
 import cv2
 import numpy as np
-from src.schemas import SecurityEvent
+from src.analyzers.vlm_describer import VLMDescriber
+from src.schemas import BestCropRecord, SecurityEvent
 
 
 class AsyncClipWriter:
-    def __init__(self, output_dir: str = "data/outputs", fps: int = 16):
+    """Background worker that runs VLM description, encodes H.264 MP4 clips, and logs JSONL."""
+
+    def __init__(
+        self,
+        output_dir: str = "data/outputs",
+        fps: int = 16,
+        vlm_describer: Optional[VLMDescriber] = None,
+    ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.fps = fps
+        self.vlm_describer = vlm_describer
         self.has_ffmpeg = shutil.which("ffmpeg") is not None
         self._queue: Queue = Queue()
         self._worker = threading.Thread(target=self._process_queue, daemon=True)
         self._worker.start()
 
-    def submit(self, event: SecurityEvent, frames: List[np.ndarray]) -> None:
-        self._queue.put((event, frames))
+    def submit(
+        self,
+        event: SecurityEvent,
+        frames: List[np.ndarray],
+        best_crop: Optional[BestCropRecord] = None,
+    ) -> None:
+        self._queue.put((event, frames, best_crop))
 
     def _process_queue(self) -> None:
         while True:
             item = self._queue.get()
             if item is None:
                 break
-            event, frames = item
+            event, frames, best_crop = item
             try:
+                if self.vlm_describer is not None:
+                    event.description = self.vlm_describer.build_alert_message(event, best_crop)
+
                 if frames and event.requires_video_clip:
                     clip_path = self.output_dir / f"{event.event_id}.mp4"
                     self._write_h264_mp4(clip_path, frames)
                     event.clip_path = str(clip_path)
+
                 self._write_metadata(event)
+                print(f"[SAVED] {event.event_id} -> {event.description}")
             finally:
                 self._queue.task_done()
 
