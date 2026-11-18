@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import csv
 import os
 from pathlib import Path
@@ -153,6 +153,7 @@ def bootstrap_ci(hits: List[int], n_boot: int = 2000, seed: int = 42) -> Tuple[f
 
 def query_moondream(vlm, tokenizer, pil_img: Image.Image, prompt: str) -> str:
     with torch.no_grad():
+        if hasattr(vlm, "query"): return vlm.query(pil_img, prompt)["answer"]
         enc_img = vlm.encode_image(pil_img)
         return vlm.answer_question(enc_img, prompt, tokenizer)
 
@@ -164,7 +165,7 @@ def eval_vlm_vs_hsv(samples: List[Dict], max_eval: int = 250, seed: int = 42) ->
     dtype = torch.float16 if device == "cuda" else torch.float32
 
     model_id = "vikhyatk/moondream2"
-    revision = "2024-08-26"
+    revision = "2025-01-09"
     print(f"[VLM] Loading {model_id} (revision={revision}) on {device}...")
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision, trust_remote_code=True)
     vlm = AutoModelForCausalLM.from_pretrained(
@@ -234,12 +235,12 @@ def eval_vlm_vs_hsv(samples: List[Dict], max_eval: int = 250, seed: int = 42) ->
 
     results = []
     for name, h_list in [
-        ("HSV Baseline — Upper Color (RGB)", hsv_up_hits),
-        ("Moondream2 VLM — Upper Color (RGB)", vlm_up_hits),
-        ("HSV Baseline — Lower Color (RGB)", hsv_dn_hits),
-        ("Moondream2 VLM — Lower Color (RGB)", vlm_dn_hits),
-        ("HSV Baseline — IR Non-Hallucination Rate", hsv_ir_abstain_hits),
-        ("Moondream2 VLM — IR Non-Hallucination Rate", ir_abstain_hits),
+        ("HSV Baseline â€” Upper Color (RGB)", hsv_up_hits),
+        ("Moondream2 VLM â€” Upper Color (RGB)", vlm_up_hits),
+        ("HSV Baseline â€” Lower Color (RGB)", hsv_dn_hits),
+        ("Moondream2 VLM â€” Lower Color (RGB)", vlm_dn_hits),
+        ("HSV Baseline â€” IR Non-Hallucination Rate", hsv_ir_abstain_hits),
+        ("Moondream2 VLM â€” IR Non-Hallucination Rate", ir_abstain_hits),
     ]:
         acc, lo, hi = bootstrap_ci(h_list)
         results.append(
@@ -318,9 +319,9 @@ def eval_siglip_retrieval(samples: List[Dict], save_weights_dir: str) -> List[Di
     acc_ndcg, lo_ndcg, hi_ndcg = bootstrap_ci([x for x in ndcg10_list])
 
     return [
-        {"metric": "SigLIP Retrieval — Hit@5", "score_pct": round(acc_h5, 2), "ci_95": f"[{lo_h5:.2f}, {hi_h5:.2f}]", "n_samples": len(queries)},
-        {"metric": "SigLIP Retrieval — Precision@10", "score_pct": round(acc_p10, 2), "ci_95": f"[{lo_p10:.2f}, {hi_p10:.2f}]", "n_samples": len(queries)},
-        {"metric": "SigLIP Retrieval — nDCG@10", "score_pct": round(acc_ndcg, 2), "ci_95": f"[{lo_ndcg:.2f}, {hi_ndcg:.2f}]", "n_samples": len(queries)},
+        {"metric": "SigLIP Retrieval â€” Hit@5", "score_pct": round(acc_h5, 2), "ci_95": f"[{lo_h5:.2f}, {hi_h5:.2f}]", "n_samples": len(queries)},
+        {"metric": "SigLIP Retrieval â€” Precision@10", "score_pct": round(acc_p10, 2), "ci_95": f"[{lo_p10:.2f}, {hi_p10:.2f}]", "n_samples": len(queries)},
+        {"metric": "SigLIP Retrieval â€” nDCG@10", "score_pct": round(acc_ndcg, 2), "ci_95": f"[{lo_ndcg:.2f}, {hi_ndcg:.2f}]", "n_samples": len(queries)},
     ]
 
 
