@@ -11,7 +11,7 @@ class SpatialRuleEngine:
 
     def __init__(self, zones_path: str = "configs/camera_zones.json"):
         path = Path(zones_path)
-        self.cfg = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        self.cfg = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
         self.roi_polygons = self.cfg.get("roi_polygons", [])
         self.door_zones = self.cfg.get("door_zones", [])
 
@@ -164,3 +164,4 @@ class SpatialRuleEngine:
         for tid in to_remove:
             del self.track_history[tid]
         return events
+
