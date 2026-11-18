@@ -1,0 +1,17 @@
+﻿stream:
+  buffer_fps: 16
+  analysis_fps: 8
+  buffer_seconds: 30
+  pre_roll_seconds: 4.0
+  post_roll_seconds: 11.0
+  jpeg_quality: 85
+
+perception:
+  model_weights: "weights/yolov8n.pt"
+  tracker_config: "bytetrack.yaml"
+  confidence_threshold: 0.45
+  person_class_id: 0
+
+events:
+  cooldown_seconds: 15.0
+  output_dir: "data/outputs"

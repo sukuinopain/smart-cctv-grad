@@ -1,0 +1,23 @@
+﻿{
+  "roi_polygons": [
+    {
+      "name": "full_scene",
+      "points": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    }
+  ],
+  "door_zones": [
+    {
+      "name": "main_door",
+      "zone_points": [[0.25, 0.55], [0.75, 0.55], [0.75, 0.95], [0.25, 0.95]],
+      "tripwire": [[0.25, 0.75], [0.75, 0.75]],
+      "inside_direction": "down"
+    }
+  ],
+  "asset_zones": [
+    {
+      "name": "protected_desk",
+      "points": [[0.60, 0.40], [0.90, 0.40], [0.90, 0.85], [0.60, 0.85]],
+      "dwell_threshold_sec": 4.0
+    }
+  ]
+}
