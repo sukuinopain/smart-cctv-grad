@@ -1,6 +1,5 @@
 import argparse
 import csv
-import json
 import os
 from pathlib import Path
 import random
@@ -11,7 +10,7 @@ import numpy as np
 from PIL import Image
 import scipy.io
 import torch
-from transformers import AutoModel, AutoModelForCausalLM, AutoProcessor
+from transformers import AutoModel, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
 
 UPPER_COLORS = ["black", "white", "red", "purple", "yellow", "gray", "blue", "green"]
@@ -37,14 +36,14 @@ def load_market_annotations(mat_path: str, test_dir: str) -> List[Dict]:
     attr_struct = mat["market_attribute"][0, 0]["test"][0, 0]
     field_names = attr_struct.dtype.names
     attr_arrays = {name: attr_struct[name].squeeze() for name in field_names}
-    image_indices = [int(x) for x in attr_arrays["image_index"]]
+    image_indices = [int(np.asarray(x).item()) for x in attr_arrays["image_index"]]
 
     id_to_attrs: Dict[int, Dict] = {}
     for idx, pid in enumerate(image_indices):
-        up_cols = [c for c in UPPER_COLORS if f"up{c}" in attr_arrays and int(attr_arrays[f"up{c}"][idx]) == 2]
-        down_cols = [c for c in LOWER_COLORS if f"down{c}" in attr_arrays and int(attr_arrays[f"down{c}"][idx]) == 2]
+        up_cols = [c for c in UPPER_COLORS if f"up{c}" in attr_arrays and int(np.asarray(attr_arrays[f"up{c}"][idx]).item()) == 2]
+        down_cols = [c for c in LOWER_COLORS if f"down{c}" in attr_arrays and int(np.asarray(attr_arrays[f"down{c}"][idx]).item()) == 2]
         has_bag = any(
-            k in attr_arrays and int(attr_arrays[k][idx]) == 2
+            k in attr_arrays and int(np.asarray(attr_arrays[k][idx]).item()) == 2
             for k in ("backpack", "bag", "handbag")
         )
         if up_cols and down_cols:
@@ -70,7 +69,11 @@ def load_market_annotations(mat_path: str, test_dir: str) -> List[Dict]:
 def hsv_predict_color(img_bgr: np.ndarray, region: str = "upper", allowed: List[str] = UPPER_COLORS) -> str:
     """Classical HSV dominant-color baseline on torso or legs crop."""
     h, w, _ = img_bgr.shape
-    crop = img_bgr[int(h * 0.20):int(h * 0.52), int(w * 0.25):int(w * 0.75)] if region == "upper" else img_bgr[int(h * 0.55):int(h * 0.88), int(w * 0.25):int(w * 0.75)]
+    crop = (
+        img_bgr[int(h * 0.20):int(h * 0.52), int(w * 0.25):int(w * 0.75)]
+        if region == "upper"
+        else img_bgr[int(h * 0.55):int(h * 0.88), int(w * 0.25):int(w * 0.75)]
+    )
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).reshape(-1, 3)
     med_h, med_s, med_v = np.median(hsv, axis=0)
 
@@ -97,10 +100,38 @@ def hsv_predict_color(img_bgr: np.ndarray, region: str = "upper", allowed: List[
 
 
 def normalize_vlm_color(raw_text: str, allowed: List[str]) -> str:
-    txt = raw_text.lower()
-    if any(w in txt for w in ["grayscale", "black and white", "monochrome", "cannot determine", "unclear", "unknown", "no color"]):
+    txt = str(raw_text).lower()
+    if any(
+        w in txt
+        for w in [
+            "grayscale",
+            "black and white",
+            "black-and-white",
+            "monochrome",
+            "cannot determine",
+            "unclear",
+            "unknown",
+            "no color",
+            "not visible",
+        ]
+    ):
         return "unknown_ir"
-    aliases = {"grey": "gray", "dark": "black", "light": "white", "navy": "blue", "maroon": "red", "khaki": "brown", "tan": "brown"}
+    aliases = {
+        "grey": "gray",
+        "dark": "black",
+        "light": "white",
+        "navy": "blue",
+        "denim": "blue",
+        "jeans": "blue",
+        "maroon": "red",
+        "burgundy": "red",
+        "crimson": "red",
+        "khaki": "brown",
+        "tan": "brown",
+        "beige": "brown",
+        "violet": "purple",
+        "magenta": "pink",
+    }
     for k, v in aliases.items():
         if re.search(rf"\b{k}\b", txt) and v in allowed:
             return v
@@ -120,16 +151,25 @@ def bootstrap_ci(hits: List[int], n_boot: int = 2000, seed: int = 42) -> Tuple[f
     return mean_val, float(lo), float(hi)
 
 
+def query_moondream(vlm, tokenizer, pil_img: Image.Image, prompt: str) -> str:
+    with torch.no_grad():
+        enc_img = vlm.encode_image(pil_img)
+        return vlm.answer_question(enc_img, prompt, tokenizer)
+
+
 def eval_vlm_vs_hsv(samples: List[Dict], max_eval: int = 250, seed: int = 42) -> List[Dict]:
     rng = random.Random(seed)
     subset = rng.sample(samples, min(max_eval, len(samples)))
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
 
-    print(f"[VLM] Loading Moondream2 on {device}...")
+    model_id = "vikhyatk/moondream2"
+    revision = "2024-08-26"
+    print(f"[VLM] Loading {model_id} (revision={revision}) on {device}...")
+    tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision, trust_remote_code=True)
     vlm = AutoModelForCausalLM.from_pretrained(
-        "vikhyatk/moondream2",
-        revision="2025-01-09",
+        model_id,
+        revision=revision,
         trust_remote_code=True,
         torch_dtype=dtype,
     ).to(device).eval()
@@ -140,6 +180,8 @@ def eval_vlm_vs_hsv(samples: List[Dict], max_eval: int = 250, seed: int = 42) ->
 
     for i, item in enumerate(subset):
         img_bgr = cv2.imread(item["path"])
+        if img_bgr is None:
+            continue
         pil_rgb = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
 
         # 1. RGB Evaluation (HSV Baseline vs Moondream2)
@@ -148,8 +190,18 @@ def eval_vlm_vs_hsv(samples: List[Dict], max_eval: int = 250, seed: int = 42) ->
         hsv_up_hits.append(int(hsv_up == item["upper_color"]))
         hsv_dn_hits.append(int(hsv_dn == item["lower_color"]))
 
-        ans_up = vlm.query(pil_rgb, "What is the main color of the person's upper clothing/shirt? Answer with one color word, or 'unknown' if grayscale/unclear.")["answer"]
-        ans_dn = vlm.query(pil_rgb, "What is the main color of the person's lower clothing/pants? Answer with one color word, or 'unknown' if grayscale/unclear.")["answer"]
+        ans_up = query_moondream(
+            vlm,
+            tokenizer,
+            pil_rgb,
+            "What is the single main color of the person's shirt or upper clothing? Answer in one color word.",
+        )
+        ans_dn = query_moondream(
+            vlm,
+            tokenizer,
+            pil_rgb,
+            "What is the single main color of the person's pants, shorts, or lower clothing? Answer in one color word.",
+        )
         vlm_up = normalize_vlm_color(ans_up, UPPER_COLORS)
         vlm_dn = normalize_vlm_color(ans_dn, LOWER_COLORS)
         vlm_up_hits.append(int(vlm_up == item["upper_color"]))
@@ -162,11 +214,19 @@ def eval_vlm_vs_hsv(samples: List[Dict], max_eval: int = 250, seed: int = 42) ->
             pil_ir = Image.fromarray(gray_bgr)
 
             hsv_ir = hsv_predict_color(gray_bgr, "upper", UPPER_COLORS)
-            hsv_ir_abstain_hits.append(int(hsv_ir == "unknown_ir"))  # Always 0 (hallucinates black/gray/white)
+            hsv_ir_abstain_hits.append(int(hsv_ir == "unknown_ir"))
 
-            ans_ir = vlm.query(pil_ir, "This is a surveillance crop. What color is the person's shirt? If the image is black-and-white/grayscale so true color cannot be known, answer 'grayscale'.")["answer"]
+            ans_ir = query_moondream(
+                vlm,
+                tokenizer,
+                pil_ir,
+                "Is this image in color or grayscale (black and white)? If it is grayscale and true clothing color cannot be determined, reply with the word 'grayscale'.",
+            )
             vlm_ir = normalize_vlm_color(ans_ir, UPPER_COLORS)
             ir_abstain_hits.append(int(vlm_ir == "unknown_ir"))
+
+        if (i + 1) % 25 == 0 or (i + 1) == len(subset):
+            print(f"  [VLM Progress] {i + 1}/{len(subset)} identities evaluated...")
 
     del vlm
     if torch.cuda.is_available():
@@ -182,8 +242,25 @@ def eval_vlm_vs_hsv(samples: List[Dict], max_eval: int = 250, seed: int = 42) ->
         ("Moondream2 VLM — IR Non-Hallucination Rate", ir_abstain_hits),
     ]:
         acc, lo, hi = bootstrap_ci(h_list)
-        results.append({"metric": name, "score_pct": round(acc, 2), "ci_95": f"[{lo:.2f}, {hi:.2f}]", "n_samples": len(h_list)})
+        results.append(
+            {
+                "metric": name,
+                "score_pct": round(acc, 2),
+                "ci_95": f"[{lo:.2f}, {hi:.2f}]",
+                "n_samples": len(h_list),
+            }
+        )
     return results
+
+
+def _extract_tensor(feat_out) -> torch.Tensor:
+    if isinstance(feat_out, torch.Tensor):
+        return feat_out
+    if hasattr(feat_out, "pooler_output") and feat_out.pooler_output is not None:
+        return feat_out.pooler_output
+    if hasattr(feat_out, "last_hidden_state"):
+        return feat_out.last_hidden_state[:, 0]
+    return feat_out[0]
 
 
 def eval_siglip_retrieval(samples: List[Dict], save_weights_dir: str) -> List[Dict]:
@@ -194,7 +271,6 @@ def eval_siglip_retrieval(samples: List[Dict], save_weights_dir: str) -> List[Di
     model = AutoModel.from_pretrained(model_id).to(device).eval()
     processor = AutoProcessor.from_pretrained(model_id)
 
-    # Save local copy of SigLIP weights to Drive for offline/local deployment
     Path(save_weights_dir).mkdir(parents=True, exist_ok=True)
     model.save_pretrained(save_weights_dir)
     processor.save_pretrained(save_weights_dir)
@@ -206,12 +282,12 @@ def eval_siglip_retrieval(samples: List[Dict], save_weights_dir: str) -> List[Di
         imgs = [Image.open(x["path"]).convert("RGB") for x in batch]
         inputs = processor(images=imgs, return_tensors="pt", padding=True).to(device)
         with torch.no_grad():
-            feats = model.get_image_features(**inputs)
+            raw_out = model.get_image_features(**inputs)
+            feats = _extract_tensor(raw_out)
             feats = feats / feats.norm(dim=-1, keepdim=True)
             img_embeds.append(feats.cpu())
-    gallery_emb = torch.cat(img_embeds, dim=0)  # [N, D]
+    gallery_emb = torch.cat(img_embeds, dim=0)
 
-    # Auto-generate attribute queries that have >= 10 matching identities in gallery
     queries = []
     for up in UPPER_COLORS:
         for dn in LOWER_COLORS:
@@ -225,7 +301,8 @@ def eval_siglip_retrieval(samples: List[Dict], save_weights_dir: str) -> List[Di
     for q_text, rel in queries:
         t_in = processor(text=[q_text], padding="max_length", return_tensors="pt").to(device)
         with torch.no_grad():
-            t_feat = model.get_text_features(**t_in)
+            raw_t = model.get_text_features(**t_in)
+            t_feat = _extract_tensor(raw_t)
             t_feat = t_feat / t_feat.norm(dim=-1, keepdim=True)
         sims = (gallery_emb @ t_feat.cpu().T).squeeze(1).numpy()
         top10_idx = np.argsort(-sims)[:10]
@@ -236,11 +313,23 @@ def eval_siglip_retrieval(samples: List[Dict], save_weights_dir: str) -> List[Di
         dcg10 = sum(top10_rel[r] / np.log2(r + 2) for r in range(10))
         ndcg10_list.append(dcg10 / idcg10)
 
+    acc_h5, lo_h5, hi_h5 = bootstrap_ci(hit5_list)
+    acc_p10, lo_p10, hi_p10 = bootstrap_ci([x for x in prec10_list])
+    acc_ndcg, lo_ndcg, hi_ndcg = bootstrap_ci([x for x in ndcg10_list])
+
     return [
-        {"metric": "SigLIP Retrieval — Hit@5", "score_pct": round(100.0 * float(np.mean(hit5_list)), 2), "ci_95": "N/A", "n_samples": len(queries)},
-        {"metric": "SigLIP Retrieval — Precision@10", "score_pct": round(100.0 * float(np.mean(prec10_list)), 2), "ci_95": "N/A", "n_samples": len(queries)},
-        {"metric": "SigLIP Retrieval — nDCG@10", "score_pct": round(100.0 * float(np.mean(ndcg10_list)), 2), "ci_95": "N/A", "n_samples": len(queries)},
+        {"metric": "SigLIP Retrieval — Hit@5", "score_pct": round(acc_h5, 2), "ci_95": f"[{lo_h5:.2f}, {hi_h5:.2f}]", "n_samples": len(queries)},
+        {"metric": "SigLIP Retrieval — Precision@10", "score_pct": round(acc_p10, 2), "ci_95": f"[{lo_p10:.2f}, {hi_p10:.2f}]", "n_samples": len(queries)},
+        {"metric": "SigLIP Retrieval — nDCG@10", "score_pct": round(acc_ndcg, 2), "ci_95": f"[{lo_ndcg:.2f}, {hi_ndcg:.2f}]", "n_samples": len(queries)},
     ]
+
+
+def save_rows(out_csv: str, rows: List[Dict]) -> None:
+    Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["metric", "score_pct", "ci_95", "n_samples"])
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 if __name__ == "__main__":
@@ -256,14 +345,11 @@ if __name__ == "__main__":
     print(f"[INFO] Loaded {len(samples)} unique annotated identities from Market-1501 test gallery.")
 
     vlm_rows = eval_vlm_vs_hsv(samples, max_eval=args.max_vlm_samples)
+    save_rows(args.out_csv, vlm_rows)
+
     siglip_rows = eval_siglip_retrieval(samples, save_weights_dir=args.siglip_dir)
     all_rows = vlm_rows + siglip_rows
-
-    Path(args.out_csv).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["metric", "score_pct", "ci_95", "n_samples"])
-        writer.writeheader()
-        writer.writerows(all_rows)
+    save_rows(args.out_csv, all_rows)
 
     print("\n=== Market-1501 VLM, HSV Baseline & SigLIP Search Results ===")
     for r in all_rows:
