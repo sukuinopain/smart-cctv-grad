@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Dict, Optional
 import cv2
 import numpy as np
 from PIL import Image
@@ -8,7 +8,7 @@ from src.schemas import BestCropRecord, SecurityEvent
 
 
 class VLMDescriber:
-    """Extracts concise person attributes from BestCropRecord using Moondream2."""
+    """Extracts concise person attributes for one or multiple subjects using Moondream2."""
 
     def __init__(
         self,
@@ -33,7 +33,7 @@ class VLMDescriber:
             self.model = AutoModelForCausalLM.from_pretrained(
                 model_id,
                 trust_remote_code=True,
-                torch_dtype=dtype,
+                dtype=dtype,
                 cache_dir=cache_dir,
             ).to(self.device)
             self.model.eval()
@@ -80,7 +80,17 @@ class VLMDescriber:
             print(f"[VLM ERROR] Inference failed for ID {track_id}: {e}")
             return f"Person ID {track_id}"
 
-    def build_alert_message(self, event: SecurityEvent, best_crop: Optional[BestCropRecord]) -> str:
-        tid = event.involved_track_ids[0] if event.involved_track_ids else -1
-        subject_desc = self.describe_person(best_crop, tid)
-        return f"[{event.event_type.value}] at {event.zone_name} (t={event.start_ts:.1f}s) | Subject: {subject_desc}"
+    def build_alert_message(
+        self, event: SecurityEvent, best_crops: Dict[int, Optional[BestCropRecord]]
+    ) -> str:
+        if not event.involved_track_ids:
+            return f"[{event.event_type.value}] at {event.zone_name} (t={event.start_ts:.1f}s)"
+
+        descriptions = []
+        for idx, tid in enumerate(event.involved_track_ids, start=1):
+            desc = self.describe_person(best_crops.get(tid), tid)
+            prefix = f"Person {idx}" if len(event.involved_track_ids) > 1 else "Subject"
+            descriptions.append(f"{prefix}: {desc}")
+
+        joined_subjects = " | ".join(descriptions)
+        return f"[{event.event_type.value}] at {event.zone_name} (t={event.start_ts:.1f}s) | {joined_subjects}"

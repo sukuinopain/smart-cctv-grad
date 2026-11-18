@@ -12,6 +12,13 @@ perception:
   confidence_threshold: 0.45
   person_class_id: 0
 
+action:
+  enabled: true
+  weights_path: "weights/fight_r3d18.pth"
+  clip_len: 16
+  eval_stride: 4
+  confidence_threshold: 0.78
+
 vlm:
   enabled: true
   model_id: "vikhyatk/moondream2"

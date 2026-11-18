@@ -4,7 +4,7 @@ from queue import Queue
 import shutil
 import subprocess
 import threading
-from typing import List, Optional
+from typing import Dict, List, Optional
 import cv2
 import numpy as np
 from src.analyzers.vlm_describer import VLMDescriber
@@ -12,7 +12,7 @@ from src.schemas import BestCropRecord, SecurityEvent
 
 
 class AsyncClipWriter:
-    """Background worker that runs VLM description, encodes H.264 MP4 clips, and logs JSONL."""
+    """Background worker that runs multi-subject VLM description, encodes H.264 MP4 clips, and logs JSONL."""
 
     def __init__(
         self,
@@ -33,19 +33,19 @@ class AsyncClipWriter:
         self,
         event: SecurityEvent,
         frames: List[np.ndarray],
-        best_crop: Optional[BestCropRecord] = None,
+        best_crops: Optional[Dict[int, Optional[BestCropRecord]]] = None,
     ) -> None:
-        self._queue.put((event, frames, best_crop))
+        self._queue.put((event, frames, best_crops or {}))
 
     def _process_queue(self) -> None:
         while True:
             item = self._queue.get()
             if item is None:
                 break
-            event, frames, best_crop = item
+            event, frames, best_crops = item
             try:
                 if self.vlm_describer is not None:
-                    event.description = self.vlm_describer.build_alert_message(event, best_crop)
+                    event.description = self.vlm_describer.build_alert_message(event, best_crops)
 
                 if frames and event.requires_video_clip:
                     clip_path = self.output_dir / f"{event.event_id}.mp4"
