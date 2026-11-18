@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,7 +12,8 @@ st.set_page_config(
     layout="wide",
 )
 
-OUTPUT_DIR = Path("data/outputs")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+OUTPUT_DIR = PROJECT_ROOT / "data" / "outputs"
 LOG_FILE = OUTPUT_DIR / "events_log.jsonl"
 
 EVENT_STYLES = {
@@ -20,6 +22,11 @@ EVENT_STYLES = {
     "Arrival": ("🚪", "green"),
     "Departure": ("🚶", "blue"),
 }
+
+
+def resolve_asset(rel_or_abs: str) -> Path:
+    p = Path(rel_or_abs)
+    return p if p.is_absolute() else (PROJECT_ROOT / p)
 
 
 def load_events() -> list:
@@ -40,7 +47,6 @@ def load_events() -> list:
 st.title("🛡️ Smart CCTV Surveillance & Event Analytics")
 st.caption("Hybrid 4-Stage Architecture: YOLOv8 + ByteTrack | Spatial Rules | R3D-18 Action 3D-CNN | Moondream2 VLM")
 
-# --- Sidebar: Filters & Live Video Runner ---
 with st.sidebar:
     st.header("🔍 Filter & Search Alerts")
     selected_types = st.multiselect(
@@ -60,13 +66,13 @@ with st.sidebar:
             tmp.write(uploaded_video.read())
             tmp_path = tmp.name
 
-        cmd = [sys.executable, "src/pipeline.py", "--source", tmp_path]
+        cmd = [sys.executable, str(PROJECT_ROOT / "src" / "pipeline.py"), "--source", tmp_path]
         if not use_vlm:
             cmd.append("--no-vlm")
 
         with st.spinner("Processing video through 4-stage AI pipeline..."):
-            env = {"PYTHONPATH": "."}
-            res = subprocess.run(cmd, capture_output=True, text=True, env={**dict(__import__("os").environ), **env})
+            env = {**os.environ, "PYTHONPATH": str(PROJECT_ROOT)}
+            res = subprocess.run(cmd, cwd=str(PROJECT_ROOT), capture_output=True, text=True, env=env)
 
         if res.returncode == 0:
             st.success("Analysis complete! Refreshing feed...")
@@ -81,7 +87,6 @@ with st.sidebar:
             LOG_FILE.unlink()
         st.rerun()
 
-# --- Main Area: KPIs & Event Cards ---
 events = load_events()
 
 col1, col2, col3, col4 = st.columns(4)
@@ -99,7 +104,7 @@ filtered = [
 ]
 
 if not filtered:
-    st.info("No security events match your current filters. Run the pipeline on a video to populate alerts.")
+    st.info(f"No security events found in `{LOG_FILE}`.")
 else:
     for ev in filtered:
         ev_type = ev.get("event_type", "Event")
@@ -114,16 +119,18 @@ else:
             vid_col, snap_col = st.columns([2, 1])
             with vid_col:
                 clip_p = ev.get("clip_path")
-                if clip_p and Path(clip_p).exists():
-                    st.video(clip_p)
+                resolved_clip = resolve_asset(clip_p) if clip_p else None
+                if resolved_clip and resolved_clip.exists():
+                    st.video(str(resolved_clip))
                 else:
                     st.warning("Video clip file not found on disk.")
 
             with snap_col:
                 st.markdown("**Subject Best Crop(s):**")
-                crops = [p for p in ev.get("crop_paths", []) if Path(p).exists()]
+                crops = [resolve_asset(p) for p in ev.get("crop_paths", [])]
+                crops = [p for p in crops if p.exists()]
                 if crops:
                     for cp in crops:
-                        st.image(cp, caption=Path(cp).name, use_container_width=True)
+                        st.image(str(cp), caption=cp.name, use_container_width=True)
                 else:
                     st.caption("No cropped snapshot saved for this event.")
