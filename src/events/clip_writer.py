@@ -12,7 +12,7 @@ from src.schemas import BestCropRecord, SecurityEvent
 
 
 class AsyncClipWriter:
-    """Background worker that runs multi-subject VLM description, encodes H.264 MP4 clips, and logs JSONL."""
+    """Background worker that saves person snapshots, runs VLM description, encodes H.264 clips, and logs JSONL."""
 
     def __init__(
         self,
@@ -44,9 +44,20 @@ class AsyncClipWriter:
                 break
             event, frames, best_crops = item
             try:
+                # 1. Save sharpest subject snapshots for UI display
+                saved_crops: List[str] = []
+                for tid, crop_rec in best_crops.items():
+                    if crop_rec is not None and crop_rec.crop_bgr is not None and crop_rec.crop_bgr.size > 0:
+                        crop_file = self.output_dir / f"{event.event_id}_p{tid}.jpg"
+                        cv2.imwrite(str(crop_file), crop_rec.crop_bgr)
+                        saved_crops.append(str(crop_file))
+                event.crop_paths = saved_crops
+
+                # 2. Generate natural-language description via VLM
                 if self.vlm_describer is not None:
                     event.description = self.vlm_describer.build_alert_message(event, best_crops)
 
+                # 3. Encode 15s H.264 video clip
                 if frames and event.requires_video_clip:
                     clip_path = self.output_dir / f"{event.event_id}.mp4"
                     self._write_h264_mp4(clip_path, frames)
@@ -96,6 +107,7 @@ class AsyncClipWriter:
             "track_ids": event.involved_track_ids,
             "description": event.description or "",
             "clip_path": event.clip_path,
+            "crop_paths": event.crop_paths,
         }
         with open(meta_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")

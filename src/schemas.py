@@ -1,4 +1,4 @@
-﻿from dataclasses import dataclass, field
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Tuple
 import numpy as np
@@ -55,3 +55,4 @@ class SecurityEvent:
     requires_video_clip: bool = True
     description: Optional[str] = None
     clip_path: Optional[str] = None
+    crop_paths: List[str] = field(default_factory=list)
